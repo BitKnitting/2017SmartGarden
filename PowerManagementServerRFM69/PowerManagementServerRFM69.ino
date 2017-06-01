@@ -1,5 +1,12 @@
-//#define DEBUG
-#include <DebugLib.h>
+/*
+ * The purpose of this code is to explore power management for the Feather M0
+ * in an attempt to extend the battery life.
+ * 
+ * Since I use M0 commands to put the chip into sleep mode, Serial.prints won't work.
+ * I'll attempt to use LED blinks to figure out the state the chip is in.
+ * 3 blinks 1 second apart - could not initialize RFM69.
+ * 4 blinks 300ms apart - received an ack from the sender.
+ */
 //***********************************************************************
 /*
    Stuff for the RFM69
@@ -28,7 +35,6 @@ uint8_t buf[RH_RF69_MAX_MESSAGE_LEN];
  ********************************************************/
 void setup()
 {
-  DEBUG_PRINTLNF("*** Power Management ***");
   initStuff();
 }
 /********************************************************
@@ -37,15 +43,11 @@ void setup()
 void loop()
 {
   __WFI();
-  DEBUG_PRINTLNF("Got an interrupt, continuing within loop();");
   if (rf69_manager.available() ) {
     uint8_t len = sizeof(buf);
     uint8_t from;
     if (rf69_manager.recvfromAck(buf, &len, &from)) {
-      DEBUG_PRINTF("got request from node ");
-      DEBUG_PRINT(from);
-      DEBUG_PRINTF(" | RSSI: ");
-      DEBUG_PRINTLN(rf69.lastRssi());
+      Blink(LED,300,4);
     }
     rf69.sleep();
   }
@@ -54,8 +56,6 @@ void loop()
    INITSTUFF
  ********************************************************/
 void initStuff() {
-  DEBUG_BEGIN;
-  DEBUG_WAIT;
   initRadio();
   setM0SleepMode();
 }
@@ -67,8 +67,6 @@ void initRadio() {
   pinMode(RFM69_RST, OUTPUT);
   digitalWrite(RFM69_RST, LOW);
 
-  DEBUG_PRINTLNF("***MOISTURE STICK***\n");
-
   // manual reset
   digitalWrite(RFM69_RST, HIGH);
   delay(10);
@@ -76,15 +74,12 @@ void initRadio() {
   delay(10);
 
   if (!rf69_manager.init()) {
-    DEBUG_PRINTLNF("RFM69 radio init failed");
+    Blink(LED,1000,3);
     while (1);
   }
-  DEBUG_PRINTLNF("RFM69 radio init OK!");
   // Defaults after init are 434.0MHz, modulation GFSK_Rb250Fd250, +13dbM (for low power module)
   // No encryption
-  if (!rf69.setFrequency(RF69_FREQ)) {
-    DEBUG_PRINTLNF("setFrequency failed");
-  }
+  rf69.setFrequency(RF69_FREQ);
 
   // If you are using a high power RF69 eg RFM69HW, you *must* set a Tx power with the
   // ishighpowermodule flag set like this:
@@ -95,17 +90,27 @@ void initRadio() {
                     0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08
                   };
   rf69.setEncryptionKey(key);
-
-  pinMode(LED, OUTPUT);
-
-  DEBUG_PRINTF("RFM69 radio @");  DEBUG_PRINT((int)RF69_FREQ);  DEBUG_PRINTLNF(" MHz");
 }
-
+/*
+ * setM0SleepMode()
+ * 
+ * Code taken from cmpxchg8b's reply: https://forums.adafruit.com/viewtopic.php?f=57&t=104548&p=523829&sid=5b41ae032cbed1fa1d76ee495777f1b2#p523829
+ */
 void setM0SleepMode() {
   // Select IDLE, not STANDBY, by turning off the SLEEPDEEP bit
   SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
 
   // Select IDLE mode 2 (asynchronous wakeup only)
   PM->SLEEP.bit.IDLE = 2;
-
+}
+/*
+ * Blink
+ */
+void Blink(byte PIN, byte DELAY_MS, byte loops) {
+  for (byte i=0; i<loops; i++)  {
+    digitalWrite(PIN,HIGH);
+    delay(DELAY_MS);
+    digitalWrite(PIN,LOW);
+    delay(DELAY_MS);
+  }
 }

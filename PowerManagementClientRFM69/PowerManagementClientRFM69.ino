@@ -3,11 +3,6 @@
 */
 #define DEBUG
 #include <DebugLib.h>
-/*
-   Using Paul Stroffregen's TimeAlarms library.  GitHub location: https://github.com/PaulStoffregen/TimeAlarms
-   Time alarms are used to set when to ask moisture sticks for dry/wet moisture info.
-*/
-#include <TimeAlarms.h>
 //***********************************************************************
 /*
    Stuff for the RFM69 See Adafruit's fork of RadioHead Library: https://github.com/adafruit/RadioHead
@@ -86,8 +81,6 @@ void initRadio() {
                     0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08
                   };
   rf69.setEncryptionKey(key);
-
-  pinMode(LED, OUTPUT);
 
   DEBUG_PRINTF("RFM69 radio @");  DEBUG_PRINT((int)RF69_FREQ);  DEBUG_PRINTLNF(" MHz");
 }
