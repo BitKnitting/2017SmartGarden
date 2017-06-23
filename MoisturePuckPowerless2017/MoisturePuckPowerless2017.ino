@@ -1,19 +1,35 @@
-/*
-   MoisturePuck.ino
+ /*
+   MoisturePuckPowerless.ino
 
-   The RadioHead library examples (for the most part) have a client/server
-   paradigm.  In this case, the Moisture Puck(s) are servers and the Controller
-   is the client requesting packets from the server.
-*/
-#define DEBUG
-#include <DebugLib.h>
-/*
-   Stuff for measuring current draw
-*/
-//#include <Wire.h>
-#include <Adafruit_INA219.h>
+   // Copyright (c) 2017 Margaret Johnson
 
-Adafruit_INA219 ina219;
+  // Permission is hereby granted, free of charge, to any person obtaining a copy
+  // of this software and associated documentation files (the "Software"), to deal
+  // in the Software without restriction, including without limitation the rights
+  // to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  // copies of the Software, and to permit persons to whom the Software is
+  // furnished to do so, subject to the following conditions:
+
+  // The above copyright notice and this permission notice shall be included in all
+  // copies or substantial portions of the Software.
+
+  // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  // AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  // SOFTWARE.
+  //
+  // This is the firmware for the Feather M0/RFM69 915MHz Moisture Puck.  It uses the
+  // RadioHead library to communicate with a Controller.  The Moisture Puck measures
+  // the moisture content of the soil in which it's probe is inserted.
+  //
+  // This version adds in power management code to get more time out of the LiPo battery.
+  // I was getting about 44 hours before I had to recharge the LiPo without power management
+  // code.  The power management code is specific to the M0.
+*/
+
 //***********************************************************************
 /*
    Stuff for the RFM69
@@ -21,6 +37,7 @@ Adafruit_INA219 ina219;
 #include <SPI.h>
 #include <RH_RF69.h>
 #include <RHReliableDatagram.h>
+// It's 'nice' to keep in the if def to make sure the right board is being used.
 #if defined(ARDUINO_SAMD_FEATHER_M0) // Feather M0 w/Radio
 #define RFM69_CS      8
 #define RFM69_INT     3
@@ -54,6 +71,15 @@ union moistureUnion_t
   moistureInfo_t values;
   uint8_t b[sizeof(moistureInfo_t)];
 } moistureInfo;
+//*************************************************************************
+// Not using the serial port because once the M0 goes to sleep and then wakes back up,
+// the USB serial port is reattached.  At least for me, even after opening a new serial monitor
+// i can't get to Serial.println results...so I am using the built in LED of the feather for debug info.
+//#define BLINK
+#ifdef BLINK
+const int errorBlinkRate = 1000;
+const int okBlinkRate = 400;
+#endif
 /********************************************************
    SETUP
  ********************************************************/
@@ -64,49 +90,32 @@ void setup() {
    LOOP
  ********************************************************/
 void loop() {
+  // go to sleep and keep sleeping until the RFM69 wakes us up
+  // to let us know it's received packets.
+  idleSleep();
   sendMoistureInfoOnRequest();
-  float shuntvoltage = 0;
-  float busvoltage = 0;
-  float current_mA = 0;
-  float loadvoltage = 0;
-
-  shuntvoltage = ina219.getShuntVoltage_mV();
-  busvoltage = ina219.getBusVoltage_V();
-  current_mA = ina219.getCurrent_mA();
-  loadvoltage = busvoltage + (shuntvoltage / 1000);
-  
-  Serial.print("Bus Voltage:   "); Serial.print(busvoltage); Serial.println(" V");
-  Serial.print("Shunt Voltage: "); Serial.print(shuntvoltage); Serial.println(" mV");
-  Serial.print("Load Voltage:  "); Serial.print(loadvoltage); Serial.println(" V");
-  Serial.print("Current:       "); Serial.print(current_mA); Serial.println(" mA");
-  Serial.println("");
-  delay(2000);
 }
 /********************************************************
    INITSTUFF
  ********************************************************/
 void initStuff() {
-  DEBUG_BEGIN;
-  DEBUG_WAIT;
-  // Initialize the INA219.
-  // By default the initialization will use the largest range (32V, 2A).  However
-  // you can call a setCalibration function to change this range (see comments).
-  ina219.begin();
-  // To use a slightly lower 32V, 1A range (higher precision on amps):
-  //ina219.setCalibration_32V_1A();
-  // Or to use a lower 16V, 400mA range (higher precision on volts and amps):
-  ina219.setCalibration_16V_400mA();
+  digitalWrite(LED, HIGH);
   initRadio();
+#ifdef BLINK
+  pinMode(LED, OUTPUT);
+#endif
+  //Start delay of 10s to allow for new upload after reset
+  //When I didn't have this in, I couldn't get back to the bootloader! ARGH!
+  delay(10000);
+  digitalWrite(LED, LOW);
 }
 /********************************************************
    INITRADIO
+   this is mostly copy/pasted from an Adafruit example
  ********************************************************/
 void initRadio() {
-  pinMode(LED, OUTPUT);
   pinMode(RFM69_RST, OUTPUT);
   digitalWrite(RFM69_RST, LOW);
-
-  DEBUG_PRINTLNF("***MOISTURE STICK***\n");
 
   // manual reset
   digitalWrite(RFM69_RST, HIGH);
@@ -115,15 +124,15 @@ void initRadio() {
   delay(10);
 
   if (!rf69_manager.init()) {
-    DEBUG_PRINTLNF("RFM69 radio init failed");
-    while (1);
+    while (1) {  //if BLINK is defined it means the board is in front of us..
+#ifdef BLINK
+      blink(5, errorBlinkRate);
+      delay(3000);
+#endif
+    }
   }
-  DEBUG_PRINTLNF("RFM69 radio init OK!");
-  // Defaults after init are 434.0MHz, modulation GFSK_Rb250Fd250, +13dbM (for low power module)
-  // No encryption
-  if (!rf69.setFrequency(RF69_FREQ)) {
-    DEBUG_PRINTLNF("setFrequency failed");
-  }
+
+  rf69.setFrequency(RF69_FREQ);
 
   // If you are using a high power RF69 eg RFM69HW, you *must* set a Tx power with the
   // ishighpowermodule flag set like this:
@@ -134,45 +143,37 @@ void initRadio() {
                     0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08
                   };
   rf69.setEncryptionKey(key);
-
-  pinMode(LED, OUTPUT);
-
-  DEBUG_PRINTF("RFM69 radio @");  DEBUG_PRINT((int)RF69_FREQ);  DEBUG_PRINTLNF(" MHz");
 }
 /********************************************************
    SENDMOISTUREINFO
  ********************************************************/
 void sendMoistureInfoOnRequest() {
   if (rf69_manager.available() ) {  //RH server examples use this.
-    DEBUG_PRINTLNF("...RF69 manager is available");
+#ifdef BLINK
+    blink(1, okBlinkRate);
+#endif
     // Wait for a message addressed to us from the client (i.e.: the Controller)
     uint8_t len = sizeof(buf);
     uint8_t from;
     if (rf69_manager.recvfromAck(buf, &len, &from)) {
-      DEBUG_PRINTF("got request from node ");
-      DEBUG_PRINT(from);
-      DEBUG_PRINTF(" | RSSI: ");
-      DEBUG_PRINTLN(rf69.lastRssi());
       //Send Moisture Info back to node that requested it.
       moistureInfo.values.moistureReading = readMoisture();
       moistureInfo.values.batteryLevel = readBatteryLevel();
       moistureInfo.values.temperatureOfRadioChip = getTemperatureFromRadio();
-      if (!rf69_manager.sendtoWait(moistureInfo.b, sizeof(moistureInfo), from)) {
-        DEBUG_PRINTLNF("sendtoWait failed");
-      }
+      rf69_manager.sendtoWait(moistureInfo.b, sizeof(moistureInfo), from);
       rf69.sleep();
     }
   }
 }
 /********************************************************
-   READMOISTURE
+   READMOISTURE 
  ********************************************************/
 int readMoisture() {
   //read the moisture sensor...take a bunch of readings and calculate an average
   const int nReadings = 40;
   float sumOfReadings = 0.;
   for (int i = 0; i < nReadings; i++) {
-    sumOfReadings += analogRead(A0);  // The moisture sensor must be on this analog pin.
+    sumOfReadings += analogRead(A0);  // !!!The moisture sensor must be on this analog pin.!!!
   }
   return ( round(sumOfReadings / nReadings));
 }
@@ -199,5 +200,39 @@ int8_t getTemperatureFromRadio() {
   int8_t temp = rf69.temperatureRead() * 1.8 + 32;
   rf69.sleep();
   return (temp);
+}
+/*
+   IDLESLEEP - thanks to cmpxchg8b: https://forums.adafruit.com/viewtopic.php?f=57&t=104548&p=523829&sid=22b8d0735f65f3f53a0f1e8781c886e6#p523829
+*/
+void idleSleep()
+{
+  // Select IDLE, not STANDBY, by turning off the SLEEPDEEP bit
+  SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
+
+  // Select IDLE mode 2 (asynchronous wakeup only)
+  PM->SLEEP.bit.IDLE = 2;
+
+  // ARM WFI (Wait For Interrupt) instruction enters sleep mode
+  __WFI();
+}
+/*
+   BLINK
+*/
+void blink(int nTimesToBlink, int rate) {
+  int i = 1;
+  while (i <= nTimesToBlink) {
+    digitalWrite(LED, HIGH);
+    nonBlockDelay(rate);
+    digitalWrite(LED, LOW);
+    nonBlockDelay(rate);
+    i++;
+  }
+}
+/*
+   NONBLOCKDELAY
+*/
+void nonBlockDelay(int rate) {
+  int startingMillis = millis();
+  while (millis() - startingMillis < rate);
 }
 

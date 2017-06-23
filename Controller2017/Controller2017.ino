@@ -3,11 +3,7 @@
 */
 #define DEBUG
 #include <DebugLib.h>
-/*
-   Using Paul Stroffregen's TimeAlarms library.  GitHub location: https://github.com/PaulStoffregen/TimeAlarms
-   Time alarms are used to set when to ask moisture sticks for dry/wet moisture info.
-*/
-#include <TimeAlarms.h>
+
 //***********************************************************************
 /*
    Stuff for the RFM69 See Adafruit's fork of RadioHead Library: https://github.com/adafruit/RadioHead
@@ -15,11 +11,18 @@
 #include <SPI.h>
 #include <RH_RF69.h>
 #include <RHReliableDatagram.h>
-#if defined(ARDUINO_SAMD_FEATHER_M0) // Feather M0 w/Radio
+#if defined(ARDUINO_SAMD_FEATHER_M0) // Feather M0 w/Radio - I tested with this
 #define RFM69_CS      8
 #define RFM69_INT     3
 #define RFM69_RST     4
-#define LED           13
+#else //using a Featherwing RFM69 w/ Huzzah running Arduino IDE
+#define LED           BUILTIN_LED
+/*
+   From https://learn.adafruit.com/radio-featherwing/wiring#esp8266-wiring
+*/
+#define RFM69_CS  2    // "E"
+#define RFM69_RST 16   // "D"
+#define RFM69_INT 15   // "B"
 #endif
 // Singleton instance of the radio driver
 RH_RF69 rf69(RFM69_CS, RFM69_INT);
@@ -28,7 +31,10 @@ RH_RF69 rf69(RFM69_CS, RFM69_INT);
 // Class to manage message delivery and receipt, using the driver declared above
 #define MY_ADDRESS            1
 #define MOISTURESTICK_ADDRESS 2
+// Using the reliable datagram library to send/receive.
 RHReliableDatagram rf69_manager(rf69, MY_ADDRESS);
+//*********************************************************************
+// stuff for irrigation management
 // Dont put this on the stack:
 struct moistureInfo_t
 {
@@ -41,43 +47,67 @@ union moistureUnion_t
   moistureInfo_t values;
   uint8_t b[sizeof(moistureInfo_t)];
 } moistureInfo;
+#define WATERING_THRESHOLD 300
+int replyNumber = 0;
+//****************************************************************
+// Adafruit IO subscriptions and data
+#include "myNetworkStuff.h"
+Adafruit_MQTT_Publish moisture = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/moistureReadingNode2");
+Adafruit_MQTT_Publish temperature = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/temperatureNode2");
+Adafruit_MQTT_Publish batteryLevel = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/batteryLevelNode2");
+Adafruit_MQTT_Subscribe water = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/water");
+// set timezone offset from UTC
+int AIO_timeZone = -7; // UTC - 4 eastern daylight time (nyc)
+//****************************************************************
+// FLAGS
+//const uint8_t initialStateFlag = 0x0;
+//const uint8_t timeSetFlag = 0x01;
+//const uint8_t AdafruitIoConnectedFlag = 0x02;
+//const uint8_t wateringFlag = 0x04;
+//uint8_t currentState = initialStateFlag;
+//****************************************************************
+// GPIO FEATHER HUZZAH PINS USED FOR VALVES
+//#define Node2Valve  14
+//#define Node3Valve  12
+//#define Node4Valve  13
 //***********************************************************************
 void setup() {
   initStuff();
-  getMoistureInfo();
 }
 
+/********************************************************
+   LOOP
+ ********************************************************/
 void loop() {
-  //The Time Alarm callbacks were not called unless Alarm.Delay() was in the loop.
-  Alarm.delay(1);
-
+  doMqttLoopStuff();
 }
+
 /********************************************************
    INITSTUFF
  ********************************************************/
 void initStuff() {
   DEBUG_BEGIN;
   DEBUG_WAIT;
+  DEBUG_PRINTLNF("****Garden Controller***");
+  pinMode(LED, OUTPUT); 
+  blink(3,300);
+  //we've only just begun...
+  //currentState = initialStateFlag;
   initRadio();
-  setWateringTimes();
+  initNetwork();
 
 }
 /********************************************************
    INITRADIO
  ********************************************************/
 void initRadio() {
-  pinMode(LED, OUTPUT);
   pinMode(RFM69_RST, OUTPUT);
   digitalWrite(RFM69_RST, LOW);
-
-  DEBUG_PRINTLNF("***Garden Controller***\n");
-
   // manual reset
   digitalWrite(RFM69_RST, HIGH);
   delay(10);
   digitalWrite(RFM69_RST, LOW);
   delay(10);
-
   if (!rf69_manager.init()) {
     DEBUG_PRINTLNF("RFM69 radio init failed");
     while (1);
@@ -88,7 +118,6 @@ void initRadio() {
   if (!rf69.setFrequency(RF69_FREQ)) {
     DEBUG_PRINTLNF("setFrequency failed");
   }
-
   // If you are using a high power RF69 eg RFM69HW, you *must* set a Tx power with the
   // ishighpowermodule flag set like this:
   rf69.setTxPower(20, true);  // range from 14-20 for power, 2nd arg must be true for 69HCW
@@ -98,31 +127,42 @@ void initRadio() {
                     0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08
                   };
   rf69.setEncryptionKey(key);
-
-  pinMode(LED, OUTPUT);
-
+  // The controller is trying to contact a Moisture puck.  I'm finding that perhaps since
+  // the Moisture puck has to be woken up, there are times when the sent message doesn't get
+  // an ACK....so I'm bumping up the retries and timeout.
+  rf69_manager.setRetries(20);
+  rf69_manager.setTimeout(500);
   DEBUG_PRINTF("RFM69 radio @");  DEBUG_PRINT((int)RF69_FREQ);  DEBUG_PRINTLNF(" MHz");
 }
 /********************************************************
-   SETWATERINGTIMES
+   INITNETWORK
  ********************************************************/
-const int AMwateringHour = 5;
-const int PMwateringHour = 17;
-void setWateringTimes() {
-#ifdef DEBUG
-  Alarm.timerRepeat(3600, getMoistureInfo);  // 1 hour * 60 min / hour * 60 sec / min
-#else
-  //set the AM watering window
-  Alarm.alarmRepeat(AMwateringHour, 0, 0, getMoistureInfo); // Fire timer in early morning and find out if watering is needed.
-  //set the PM watering window
-  Alarm.alarmRepeat(PMwateringHour, 0, 0, getMoistureInfo);
-#endif
+void initNetwork() {
+  WiFi.begin(WLAN_SSID, WLAN_PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    DEBUG_PRINT(".");
+  }
+  DEBUG_PRINTLNF(" WiFi connected.");
+  // get updates when the water feed has input..
+  water.setCallback(handleWater);
+  mqtt.subscribe(&water);
+}
+/********************************************************
+   HANDLEWATER
+ ********************************************************/
+void handleWater(char *data, uint16_t len) {
+  blink(3,200);
+  DEBUG_PRINTF("...in handleWater callback.  I received this message: ");
+  Serial.println(data);
+  DEBUG_PRINTLNF("...now I'll ask the moisture puck for a reading and publish results to Adafruit.io");
+  getMoistureInfo();
+  publishMoistureInfo();
 }
 /********************************************************
    GETMOISTUREREADING
  ********************************************************/
 void getMoistureInfo() {
-  // Send a message to manager_server
   byte command = 0;
   if (rf69_manager.sendtoWait(&command, 1, MOISTURESTICK_ADDRESS))
   {
@@ -132,19 +172,39 @@ void getMoistureInfo() {
     // from = node == 2 -> node 2 is in Strawberry Swirl.
     if (rf69_manager.recvfromAckTimeout(moistureInfo.b, &len, 2000, &from))
     {
-      DEBUG_PRINTF("...got reply from node ");
-      DEBUG_PRINT(from);
+      replyNumber++;
+      DEBUG_PRINTF("\n...got reply ");
+      Serial.print(replyNumber);
+      DEBUG_PRINTF(" from: ");
+      Serial.print(from);
       DEBUG_PRINTF(" | RSSI: ");
-      DEBUG_PRINTLN(rf69.lastRssi());
+      Serial.println(rf69.lastRssi());
       printMoistureInfo();
+      blink(2,500);
+      blink(2,300);
+      blink(1,500);
     }
     else
     {
-      DEBUG_PRINTLNF("No reply from a moisture stick...");
+      DEBUG_PRINTF("...No reply from moisture stick ");
+      DEBUG_PRINTLN(from);
     }
   }
   else
-    DEBUG_PRINTLNF("sendtoWait failed");
+    DEBUG_PRINTLNF("...sendtoWait failed");
+}
+/********************************************************
+   PUBLISHMOISTUREINFO
+ ********************************************************/
+void publishMoistureInfo() {
+  if (moisture.publish(moistureInfo.values.moistureReading) &
+      temperature.publish(moistureInfo.values.temperatureOfRadioChip) &
+      batteryLevel.publish(moistureInfo.values.batteryLevel)) {
+    DEBUG_PRINTLNF("Published!");
+    blink(5,300);
+  } else {
+    DEBUG_PRINTLNF("Failed to publish!");
+  }
 }
 /********************************************************
    PRINTMOISTUREINFO
@@ -152,10 +212,21 @@ void getMoistureInfo() {
 void printMoistureInfo() {
   DEBUG_PRINTLNF(" ---> Moisture Info <---");
   DEBUG_PRINTF("Moisture Reading: ");
-  DEBUG_PRINT(moistureInfo.values.moistureReading);
+  Serial.print(moistureInfo.values.moistureReading);
   DEBUG_PRINTF("| Battery level: ");
-  DEBUG_PRINT(moistureInfo.values.batteryLevel);
+  Serial.print(moistureInfo.values.batteryLevel);
   DEBUG_PRINTF("| Radio Temperature: ");
-  DEBUG_PRINTLN(moistureInfo.values.temperatureOfRadioChip);
+  Serial.println(moistureInfo.values.temperatureOfRadioChip);
+}
+/********************************************************
+   DOMQTTLOOPSTUFF
+ ********************************************************/
+void doMqttLoopStuff() {
+  MQTT_connect();
+  mqtt.processPackets(2000);
+  // keep the connection alive
+  if (! mqtt.ping()) { //means a dropped packet
+    mqtt.disconnect();
+  }
 }
 

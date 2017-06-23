@@ -22,20 +22,43 @@ RH_RF69 rf69(RFM69_CS, RFM69_INT);
 #define RF69_FREQ 915.0
 // Class to manage message delivery and receipt, using the driver declared above
 #define MY_ADDRESS            1
-#define MOISTURESTICK_ADDRESS 2
+#define DEST_ADDRESS          2
 RHReliableDatagram rf69_manager(rf69, MY_ADDRESS);
+
+int16_t packetnum = 0;  // packet counter, we increment per xmission
 //*********************************************************************
 void setup() {
   initStuff();
 }
+// Dont put this on the stack:
+uint8_t buf[RH_RF69_MAX_MESSAGE_LEN];
+uint8_t data[] = "  OK";
 void loop() {
-  byte command = 0;
-  if (rf69_manager.sendtoWait(&command, 1, MOISTURESTICK_ADDRESS))
-  { DEBUG_PRINTLNF("Message sent to moisture puck");
+  delay(1000);  // Wait 1 second between transmits, could also 'sleep' here!
+
+  char radiopacket[20] = "Hello World #";
+  itoa(packetnum++, radiopacket+13, 10);
+  Serial.print("Sending "); Serial.println(radiopacket);
+  
+  // Send a message to the DESTINATION!
+  if (rf69_manager.sendtoWait((uint8_t *)radiopacket, strlen(radiopacket), DEST_ADDRESS)) {
+    // Now wait for a reply from the server
+    uint8_t len = sizeof(buf);
+    uint8_t from;   
+    if (rf69_manager.recvfromAckTimeout(buf, &len, 2000, &from)) {
+      buf[len] = 0; // zero out remaining string
+      
+      Serial.print("Got reply from #"); Serial.print(from);
+      Serial.print(" [RSSI :");
+      Serial.print(rf69.lastRssi());
+      Serial.print("] : ");
+      Serial.println((char*)buf);     
+    } else {
+      Serial.println("No reply, is anyone listening?");
+    }
   } else {
-    DEBUG_PRINTLNF("send failed to Moisture Puck.");
+    Serial.println("Sending failed (no ack)");
   }
-  delay(3000);
 }
 /********************************************************
    INITSTUFF
@@ -49,7 +72,6 @@ void initStuff() {
    INITRADIO
  ********************************************************/
 void initRadio() {
-  pinMode(LED, OUTPUT);
   pinMode(RFM69_RST, OUTPUT);
   digitalWrite(RFM69_RST, LOW);
 
@@ -84,3 +106,4 @@ void initRadio() {
 
   DEBUG_PRINTF("RFM69 radio @");  DEBUG_PRINT((int)RF69_FREQ);  DEBUG_PRINTLNF(" MHz");
 }
+
