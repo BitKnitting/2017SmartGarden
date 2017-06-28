@@ -1,7 +1,7 @@
- /*
-   MoisturePuckPowerless.ino
+/*
+  MoisturePuckPowerless.ino
 
-   // Copyright (c) 2017 Margaret Johnson
+  // Copyright (c) 2017 Margaret Johnson
 
   // Permission is hereby granted, free of charge, to any person obtaining a copy
   // of this software and associated documentation files (the "Software"), to deal
@@ -37,6 +37,9 @@
 #include <SPI.h>
 #include <RH_RF69.h>
 #include <RHReliableDatagram.h>
+// Add real time clock power management
+#include <RTCZero.h>
+RTCZero rtc;
 // It's 'nice' to keep in the if def to make sure the right board is being used.
 #if defined(ARDUINO_SAMD_FEATHER_M0) // Feather M0 w/Radio
 #define RFM69_CS      8
@@ -49,9 +52,11 @@ RH_RF69 rf69(RFM69_CS, RFM69_INT);
 // Change to 434.0 or other frequency, must match RX's freq!
 #define RF69_FREQ 915.0
 // change addresses for each client board, any number :)
-#define MY_ADDRESS     2
+#define MY_ADDRESS          2
+#define CONTROLLER_ADDRESS  1
 RHReliableDatagram rf69_manager(rf69, MY_ADDRESS);
-// Dont put this on the stack:
+// Dont put this on the stack...packet received from the Controller...using a buffer
+// that is the max size that the Controller can send.:
 uint8_t buf[RH_RF69_MAX_MESSAGE_LEN];
 //***********************************************************************
 /********************************************************
@@ -71,11 +76,37 @@ union moistureUnion_t
   moistureInfo_t values;
   uint8_t b[sizeof(moistureInfo_t)];
 } moistureInfo;
+/********************************************************
+   The current time and AM/PM watering hours are set by
+   the Controller.
+ ********************************************************/
+struct timeInfo_t
+{
+  uint8_t packetType;  //to identify if this is indeed a timeInfo packet.
+  time_t currentTime;
+  uint8_t AM_wateringHour;
+  uint8_t PM_wateringHour;
+};
+union timeUnion_t
+{
+  timeInfo_t values;
+  uint8_t b[sizeof(timeInfo_t)];
+} timeInfo;
+const byte packet_time = 1;
+const byte packet_moisture_received = 2;
+//*************************************************************************
+//states
+enum states {
+  state_waitingForTimeInfo,
+  state_okToSendMoistureInfo,
+  state_okToSleep
+} currentState;
+
 //*************************************************************************
 // Not using the serial port because once the M0 goes to sleep and then wakes back up,
 // the USB serial port is reattached.  At least for me, even after opening a new serial monitor
 // i can't get to Serial.println results...so I am using the built in LED of the feather for debug info.
-//#define BLINK
+#define BLINK
 #ifdef BLINK
 const int errorBlinkRate = 1000;
 const int okBlinkRate = 400;
@@ -90,24 +121,39 @@ void setup() {
    LOOP
  ********************************************************/
 void loop() {
-  // go to sleep and keep sleeping until the RFM69 wakes us up
-  // to let us know it's received packets.
-  idleSleep();
-  sendMoistureInfoOnRequest();
+  idle();
+#ifdef BLINK
+  digitalWrite(LED, HIGH);
+#endif
+  if (rf69_manager.available() && (currentState == state_waitingForTimeInfo) ) { //This *should* be a timeInfo packet
+    getTimeInfo();
+  }
+  if (currentState == state_okToSendMoistureInfo) {
+    sendMoistureInfo();
+  }
+  if (currentState == state_okToSleep) {
+    goToSleep();
+  }
 }
 /********************************************************
    INITSTUFF
  ********************************************************/
 void initStuff() {
+  currentState = state_waitingForTimeInfo;
+  rtc.begin();
+  rtc.attachInterrupt(wakeUp);
   digitalWrite(LED, HIGH);
   initRadio();
 #ifdef BLINK
   pinMode(LED, OUTPUT);
 #endif
   //Start delay of 10s to allow for new upload after reset
-  //When I didn't have this in, I couldn't get back to the bootloader! ARGH!
+  //When I didn't have this in, I couldn't get back to the bootloader when
+  //I put the m0 in standby mode. Since then I'm cautious.
   delay(10000);
-  digitalWrite(LED, LOW);
+#ifdef BLINK
+  blink(5, okBlinkRate);
+#endif
 }
 /********************************************************
    INITRADIO
@@ -144,29 +190,66 @@ void initRadio() {
                   };
   rf69.setEncryptionKey(key);
 }
+/*
+   getTimeInfo - we're currently in state_waitingForTimeInfo and a packet has come in from the Controller
+   hopefully, the packet contains a timeInfo structure.  We rely on this to set when to listen for requests
+   from the Controller for moisture readings.  So the first thing is to check if indeed the packet contains timeInfo
+   if it does, we can change state as well as set the rtc time which the alarm will then be based from.
+*/
+#include <Time.h> //RTCZero.cpp includes time.h, so use it here to avoid conflict with TimeLib.h
+void getTimeInfo() {
+  uint8_t len = sizeof(buf);
+  uint8_t from;
+  if (rf69_manager.recvfromAck(buf, &len, &from)) {
+    memcpy(&timeInfo, buf, sizeof(timeInfo_t));
+    rtc.setTime( hour(timeInfo.values.currentTime), minute(timeInfo.values.currentTime), second(timeInfo.values.currentTime));
+    currentState = state_okToSendMoistureInfo;
+  }
+}
+
 /********************************************************
    SENDMOISTUREINFO
  ********************************************************/
-void sendMoistureInfoOnRequest() {
-  if (rf69_manager.available() ) {  //RH server examples use this.
+void sendMoistureInfo() {
 #ifdef BLINK
-    blink(1, okBlinkRate);
+  blink(1, okBlinkRate);
 #endif
-    // Wait for a message addressed to us from the client (i.e.: the Controller)
+  //Send Moisture Info back to node that requested it.
+  moistureInfo.values.moistureReading = readMoisture();
+  moistureInfo.values.batteryLevel = readBatteryLevel();
+  moistureInfo.values.temperatureOfRadioChip = getTemperatureFromRadio();
+  // Send a message to the Controller
+  if (rf69_manager.sendtoWait(moistureInfo.b, sizeof(moistureInfo), CONTROLLER_ADDRESS)) {
+    //Now wait for a reply that lets us know the Controller got the moistureInfo
     uint8_t len = sizeof(buf);
     uint8_t from;
-    if (rf69_manager.recvfromAck(buf, &len, &from)) {
-      //Send Moisture Info back to node that requested it.
-      moistureInfo.values.moistureReading = readMoisture();
-      moistureInfo.values.batteryLevel = readBatteryLevel();
-      moistureInfo.values.temperatureOfRadioChip = getTemperatureFromRadio();
-      rf69_manager.sendtoWait(moistureInfo.b, sizeof(moistureInfo), from);
-      rf69.sleep();
+    if (rf69_manager.recvfromAckTimeout(buf, &len, 2000, &from)) {
+      if (buf[0] == packet_moisture_received) {
+        currentState = state_okToSleep;
+      }
     }
   }
+  rf69.sleep();
+}
+/*
+   goToSleep() is a request made by the Controller
+*/
+void goToSleep() {
+  byte alarmHour = setWateringHour();
+  rtc.setAlarmTime(alarmHour, 0, 0);
+  rf69.sleep();
+  rtc.standbyMode();    // Sleep until next alarm match
+}
+byte setWateringHour() {
+  byte currentHour = rtc.getHours();
+  return (currentHour > timeInfo.values.AM_wateringHour && currentHour < timeInfo.values.PM_wateringHour) ?
+         timeInfo.values.PM_wateringHour : timeInfo.values.AM_wateringHour;
+}
+void wakeUp() {
+  currentState = state_okToSendMoistureInfo;
 }
 /********************************************************
-   READMOISTURE 
+   READMOISTURE
  ********************************************************/
 int readMoisture() {
   //read the moisture sensor...take a bunch of readings and calculate an average
@@ -204,7 +287,7 @@ int8_t getTemperatureFromRadio() {
 /*
    IDLESLEEP - thanks to cmpxchg8b: https://forums.adafruit.com/viewtopic.php?f=57&t=104548&p=523829&sid=22b8d0735f65f3f53a0f1e8781c886e6#p523829
 */
-void idleSleep()
+void idle()
 {
   // Select IDLE, not STANDBY, by turning off the SLEEPDEEP bit
   SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
