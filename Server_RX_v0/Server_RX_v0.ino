@@ -122,7 +122,7 @@ uint8_t buf[RH_RF69_MAX_MESSAGE_LEN];
 
 void loop() {
   //standby();
-  //idleSleep();
+  //idle();
   if (rf69_manager.available())
   {
     // Wait for a message addressed to us from the client
