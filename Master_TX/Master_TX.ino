@@ -17,9 +17,9 @@
 #define RF69_FREQ 915.0
 
 // Where to send packets to!
-#define DEST_ADDRESS   1
+#define DEST_ADDRESS   2
 // change addresses for each client board, any number :)
-#define MY_ADDRESS     2
+#define MY_ADDRESS     1
 
 
 #if defined (__AVR_ATmega32U4__) // Feather 32u4 w/Radio
@@ -132,11 +132,15 @@ void loop() {
 
   char radiopacket[20] = "Hello World #";
   itoa(packetnum++, radiopacket + 13, 10);
-  Serial.print("Sending "); Serial.println(radiopacket);
-
+ // Serial.print("Sending "); Serial.println(radiopacket);
+char controlPacket[2];
+itoa(1,controlPacket,10);
+uint8_t packet_time = 1;
+ Serial.print("Sending "); Serial.println(controlPacket);
   // Send a message to the DESTINATION!
   Blink(LED,40,4);
-  if (rf69_manager.sendtoWait((uint8_t *)radiopacket, strlen(radiopacket), DEST_ADDRESS)) {
+  //if (rf69_manager.sendtoWait((uint8_t *)controlPacket, strlen(controlPacket), DEST_ADDRESS)) {
+     if (rf69_manager.sendtoWait((uint8_t *)&packet_time, 1, DEST_ADDRESS)) {
     // Now wait for a reply from the server
     uint8_t len = sizeof(buf);
     uint8_t from;
