@@ -1,4 +1,10 @@
-
+// Controller2017_v2
+// This code is loaded into the ESP826 Feather + FeatherWing RFM69.  It gets moisture readings from the
+// Moisture Puck and then updates data streams on Adafruit.io.
+// I wrote a blog post on this (http://bitknitting.wordpress.com)
+// Copyright: Margaret Johnson, 2017
+// License: MIT License (https://opensource.org/licenses/MIT)
+// Please give this work credit if you evolve and use.
 #include <SPI.h>
 #include <RH_RF69.h>
 #include <RHReliableDatagram.h>

@@ -1,12 +1,10 @@
-// rf69 demo tx rx.pde
-// -*- mode: C++ -*-
-// Example sketch showing how to create a simple addressed, reliable messaging client
-// with the RH_RF69 class. RH_RF69 class does not provide for addressing or
-// reliability, so you should only use RH_RF69  if you do not need the higher
-// level messaging abilities.
-// It is designed to work with the other example rf69_server.
-// Demonstrates the use of AES encryption, setting the frequency and modem
-// configuration
+// MoisturePuck2017_v2
+// This code is loaded into the Feather M0 RFM69 that has a moisture sensor attached to it
+// and will sit in some soil getting moisture readings.  The moisture readings are sent to
+// the Controller - another piece of hw/sw.  I wrote a blog post on this (http://bitknitting.wordpress.com)
+// Copyright: Margaret Johnson, 2017
+// License: MIT License (https://opensource.org/licenses/MIT)
+// Please give this work credit if you evolve and use.
 
 #include <SPI.h>
 #include <RH_RF69.h>
