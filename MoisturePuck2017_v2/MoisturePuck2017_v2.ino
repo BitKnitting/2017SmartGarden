@@ -42,6 +42,8 @@ uint8_t numMoistureInfoSends = 0;  //I need to count how many times I repeat sen
 uint8_t maxMoistureInfoSends = 2;  //I've been told to send two moisture readings before I go to sleep.
 uint8_t numMoistureInfoFails = 0;
 uint8_t maxMoistureInfoFails = 20;  //I've been told to try to send with a guaranteed delivery.  If the delivery doesn't happen after repeated attempts, I stop trying this time.
+uint8_t numTimesCheckedForMessages = 0;
+uint8_t MaxTimesCheckForMessages = 10;
 const uint8_t packetMoistureInfo = 2;
 struct moistureInfo_t
 {
@@ -49,6 +51,9 @@ struct moistureInfo_t
   int     moistureReading;
   int8_t  temperatureOfRadioChip;
   float   batteryLevel;
+  uint8_t hour;
+  uint8_t minute;
+  uint8_t second;
 };
 union moistureUnion_t
 {
@@ -75,14 +80,13 @@ union timeUnion_t
   uint8_t b[sizeof(timeInfo_t)];
 } timeInfo;
 
-
 void setup()
 {
-  //Serial.begin(115200);
-  //while (!Serial) ; // wait until serial console is open, remove if not tethered to computer
+  Serial.begin(115200);
+  while (!Serial) ; // wait until serial console is open, remove if not tethered to computer
   initStuff();
   // variable for delay is an unsigned long ->  0 to 4,294,967,295 (2^32 - 1).
-  delay(1200000); //delay 20 minutes to allow for putting box together and getting into garden 20 * 60 * 1000 = 
+  //delay(1200000); //delay 20 minutes to allow for putting box together and getting into garden 20 * 60 * 1000 =
 }
 
 /********************************************************
@@ -95,9 +99,13 @@ void setup()
    So there is a bit of time to get messages from the Controller.
  *********************************************************/
 void loop() {
-  //idle();
+  Serial.println("in loop");
   sendMoistureInfo();
   checkMessages();
+  if ( ((numMoistureInfoSends == maxMoistureInfoSends) ||  (numMoistureInfoFails == maxMoistureInfoFails) ) &&
+       (numTimesCheckedForMessages == MaxTimesCheckForMessages) ) {
+    goToSleep();
+  }
 }
 /********************************************************
    INITSTUFF
@@ -140,7 +148,7 @@ void initRadio() {
   // Wait a little longer for an ACK after sending packets
   rf69_manager.setTimeout(600); //default is 200ms, see: http://www.airspayce.com/mikem/arduino/RadioHead/classRHReliableDatagram.html#ad282ac147986a63692582f323b56c47f
   rf69_manager.setRetries(5); // default is 3...probably overkill...but want to give the Controller time to respond given it's also dealing with MQTT.
-//  Serial.print("RFM69 radio @");  Serial.print((int)RF69_FREQ);  Serial.println(" MHz");
+  //  Serial.print("RFM69 radio @");  Serial.print((int)RF69_FREQ);  Serial.println(" MHz");
 }
 /********************************************************
   INITRTC
@@ -158,7 +166,8 @@ void initRtc() {
 void wakeUp() {
   numMoistureInfoSends = 0;
   numMoistureInfoFails = 0;
-//  Serial.println("I'm Awake!");
+  numTimesCheckedForMessages = 0;
+  //  Serial.println("I'm Awake!");
 }
 /********************************************************
    SETTIMEINFOTO__TIME__
@@ -189,29 +198,22 @@ void setTimeInfoTo__TIME__() {
    SENDMOISTUREINFO
  ********************************************************/
 void sendMoistureInfo() {
-  //Serial.println(".....Send moisture reading");
+  Serial.println(".....Send moisture reading");
   moistureInfo.values.packetType = packetMoistureInfo;
   moistureInfo.values.moistureReading = readMoisture();
   moistureInfo.values.batteryLevel = readBatteryLevel();
   moistureInfo.values.temperatureOfRadioChip = getTemperatureFromRadio();
+  moistureInfo.values.hour = rtc.getHours();
+  moistureInfo.values.minute = rtc.getMinutes();
+  moistureInfo.values.second = rtc.getSeconds();;
   // Send a message to the Controller
   if (rf69_manager.sendtoWait(moistureInfo.b, sizeof(moistureInfo), CONTROLLER_ADDRESS)) {
     rf69.sleep();
     numMoistureInfoSends++;
-    //Serial.print("Sending moistureInfo try #: "); Serial.println(numMoistureInfoSends);
+    Serial.print("Sending moistureInfo try #: "); Serial.println(numMoistureInfoSends);
     // Go to sleep after the number of moisture readings the boss wants me to send have been sent.
-    if (numMoistureInfoSends == maxMoistureInfoSends) {
-      //Serial.print("Num moisture info sends: "); Serial.print(numMoistureInfoSends); Serial.println("...going to sleep...");
-      goToSleep();
-    }
   } else {
     numMoistureInfoFails++;
-    //Serial.print("Number of moistureInfo send failures: #"); Serial.println(numMoistureInfoFails);
-    // Go to sleep after the number of moisture readings the boss wants me to send have been sent - but not received.
-    if (numMoistureInfoFails == maxMoistureInfoFails) {
-      //Serial.print("Didn't receive a reply on moisture info sends: "); Serial.print(numMoistureInfoFails); Serial.println("...going to sleep...");
-      goToSleep();
-    }
   }
 }
 /********************************************************
@@ -224,6 +226,7 @@ void goToSleep() {
   //Serial.print("Setting the alarm for: "); Serial.print(alarmHour); Serial.println("...talk to you then.");
   rtc.setAlarmTime(alarmHour, 00, 00);
   rtc.enableAlarm(rtc.MATCH_HHMMSS);
+  Serial.println("Going to sleep");
   rtc.standbyMode();
 }
 /********************************************************
@@ -232,27 +235,24 @@ void goToSleep() {
    I have only been trained to handle time messages.
  ********************************************************/
 void checkMessages() {
-  //Serial.println("...check messages...");
+  numTimesCheckedForMessages++;
+  Serial.print("...check messages.  This is message check # "); Serial.println(numTimesCheckedForMessages);
   if (rf69_manager.available()) {
     //handle if time info
     uint8_t len = sizeof(timeInfo);
     uint8_t from;
     if (rf69_manager.recvfromAck(timeInfo.b, &len, &from)) {
+      Serial.println("...OOOH! got a message...");
       if ((timeInfo.values.packetType == packetTime) && (len == sizeof(timeInfo)) ) {
-    //    Serial.println("Setting the time to:");
-    //    Serial.print(timeInfo.values.hour); Serial.print(":"); Serial.print(timeInfo.values.minute); Serial.print(":"), Serial.println(timeInfo.values.second);
+        Serial.println("Setting the time to:");
+        Serial.print(timeInfo.values.hour); Serial.print(":"); Serial.print(timeInfo.values.minute); Serial.print(":"), Serial.println(timeInfo.values.second);
         rtc.setTime(timeInfo.values.hour, timeInfo.values.minute, timeInfo.values.second);
       }
     }
   } else {
-    //Serial.println("...no messages available at this time.  Carry on...");
+    Serial.println("...no messages available at this time.  Carry on...");
   }
 }
-/********************************************************
-   GOTOSLEEP
-   The Controller might have messages for me.  Right now,
-   I have only been trained to handle time messages.
- ********************************************************/
 /********************************************************
    READMOISTURE
  ********************************************************/
@@ -288,20 +288,6 @@ int8_t getTemperatureFromRadio() {
   int8_t temp = rf69.temperatureRead() * 1.8 + 32;
   rf69.sleep();
   return (temp);
-}
-/*
-   IDLE - thanks to cmpxchg8b: https://forums.adafruit.com/viewtopic.php?f=57&t=104548&p=523829&sid=22b8d0735f65f3f53a0f1e8781c886e6#p523829
-*/
-void idle()
-{
-  // Select IDLE, not STANDBY, by turning off the SLEEPDEEP bit
-  SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
-
-  // Select IDLE mode 2 (asynchronous wakeup only)
-  PM->SLEEP.bit.IDLE = 2;
-
-  // ARM WFI (Wait For Interrupt) instruction enters sleep mode
-  __WFI();
 }
 void Blink(byte PIN, byte DELAY_MS, byte loops) {
   for (byte i = 0; i < loops; i++)  {

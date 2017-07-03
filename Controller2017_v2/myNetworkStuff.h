@@ -6,7 +6,6 @@
 WiFiClientSecure client;
 
 Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_USERNAME, AIO_KEY);
-Adafruit_MQTT_Subscribe timefeed = Adafruit_MQTT_Subscribe(&mqtt, "time/seconds");
 /********************************************************
    NONBLOCKDELAY
  ********************************************************/
@@ -37,6 +36,5 @@ void MQTT_connect() {
       while (1);
     }
   }
-  Serial.println("MQTT Connected!");
 }
 
