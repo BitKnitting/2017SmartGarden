@@ -11,7 +11,7 @@
 #include <TimeLib.h>
 
 // RFM69 ID numbers
-#define PUCK_ADDRESS           3
+#define PUCK_ADDRESS           4
 #define CONTROLLER_ADDRESS     1
 // Change to 434.0 or other frequency, must match RX's freq!
 #define RF69_FREQ 915.0
@@ -83,8 +83,8 @@ union timeUnion_t
 /************************* Adafruit.io Setup *********************************/
 #define AIO_SERVER      "io.adafruit.com"
 #define AIO_SERVERPORT  8883
-#define AIO_USERNAME    "XXXXXX"
-#define AIO_KEY         "XXXXXX"
+#define AIO_USERNAME    "XXXXX"
+#define AIO_KEY         "XXXXX"
 WiFiClientSecure client;
 
 Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_USERNAME, AIO_KEY);
@@ -127,16 +127,16 @@ void loop()
         //Serial.print("got moisture Info packet from : 0x");
         //Serial.println(from, HEX);
         printMoistureInfo();
-        publishMoistureInfo();
 
         // Send a reply back to the originator client
         setUpATimeInfoPacket();
         if (!rf69_manager.sendtoWait(timeInfo.b, sizeof(timeInfo), from)) {
           //Serial.println("Failed to send a timeInfo packet.");
+        }else {
+                  publishMoistureInfo(); //publish if complete with timeInfo send/receive
+                  //Note: publishing takes longer than the traffic
         }
-      } else {
-        Blink(LED, 400, 3);
-      }
+      } 
     }
   }
 }
@@ -167,9 +167,11 @@ void printMoistureInfo() {
  ********************************************************/
 void initStuff() {
   pinMode(LED, OUTPUT);
-  digitalWrite(LED, HIGH);
+  digitalWrite(LED, LOW);
   initRadio();
   initNetwork();
+  Blink(LED,400,6);
+  digitalWrite(LED,HIGH);
 }
 /********************************************************
   INITRADIO

@@ -13,7 +13,7 @@
 RTCZero rtc;
 
 // RFM69 ID numbers
-#define PUCK_ADDRESS           3
+#define PUCK_ADDRESS           4
 #define CONTROLLER_ADDRESS     1
 // Change to 434.0 or other frequency, must match RX's freq!
 #define RF69_FREQ 915.0
@@ -67,16 +67,17 @@ union timeUnion_t
 void setup()
 {
   //Serial.begin(115200);
-  //while (!Serial);
+  //while (!Serial);                                                                                                                                                                     
   initStuff();
   //Adding initial delay to allow for time to get Moisture Puck assembled and into garden before first reading
   delay( 900000); //15 minutes = 15 min * 60 sec/min * 1000 ms/sec 
+  wakeUp();
 }
 /********************************************************
    LOOP
  ********************************************************/
 void loop()
-{
+{ 
   //Serial.println("Sending moisture info packet to the Controller");
   setUpAMoistureInfoPacket();
   if (rf69_manager.sendtoWait(moistureInfo.b, sizeof(moistureInfo), CONTROLLER_ADDRESS))
@@ -108,15 +109,12 @@ void loop()
 int readMoisture() {
   //read the moisture sensor...take a bunch of readings and calculate an average
   // turn the sensor on and wait a moment...
-  digitalWrite(POWER,HIGH);
   delay(10);
   const int nReadings = 40;
   float sumOfReadings = 0.;
   for (int i = 0; i < nReadings; i++) {
     sumOfReadings += analogRead(A0);  // !!!The moisture sensor must be on this analog pin.!!!
   }
-  // Turn off power to the moisture sensor.
-  digitalWrite(POWER,LOW);
   return ( round(sumOfReadings / nReadings));
 }
 /********************************************************
@@ -166,12 +164,13 @@ void printTimeInfo() {
 ********************************************************/
 void wakeUp() {
   //Serial.println("\nI'm Awake!");
+  digitalWrite(POWER,HIGH);
 }
 /********************************************************
    GOTOSLEEP
  ********************************************************/
 void goToSleep() {
-  digitalWrite(A0,LOW);
+  digitalWrite(POWER,LOW);
   int hour = rtc.getHours();
   int alarmHour = (hour >= timeInfo.values.AM_wateringHour && hour < timeInfo.values.PM_wateringHour) ? timeInfo.values.PM_wateringHour : timeInfo.values.AM_wateringHour;
   //Serial.print("Setting the alarm for: "); //Serial.print(alarmHour); //Serial.println("...talk to you then.");
@@ -188,7 +187,6 @@ void initStuff() {
   digitalWrite(LED, LOW);
   // The Moisture sensor's v+ is connected to the POWER GPIO pin.
   pinMode(POWER,OUTPUT);
-  digitalWrite(POWER,LOW);
   initRadio();
   initRtc();
 }
