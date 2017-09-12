@@ -37,10 +37,17 @@ ehthumbs.db
 Thumbs.db
 # my files
 #######################
-#Don’t include these subfolders
+#Don’t include these files
+**/AdafruitIOLogin.h
+new_list.txt
+list.txt
+featherm0bootloader_160305.hex
+#######################
+#Only include specific subfolders
+AutoConnectTest/*
 Controller/*
 Controller2017/*
-Controller2017_v10/*
+#Controller2017_v10/*
 Controller2017_v2/*
 Controller2017_v3 /*
 Controller2017_v4/*
@@ -59,7 +66,7 @@ Master_TX/*
 MoisturePuck2017WateringPuckTest_v3/*
 MoisturePuck2017_v2/*
 MoisturePuck2017_v3/*
-MoisturePuck2017_v4/*
+#MoisturePuck2017_v4/*
 MoisturePuckLowPowerRTC2017/*
 MoisturePuck_MoistureAndTimeTest/*
 MoistureStick/*
@@ -74,16 +81,14 @@ WateringPuck2017_v2/*
 #WateringPuck2017_v3/*
 WateringPuckClientTest/*
 docs/*
-featherm0bootloader_160305.hex/*
 getcurrent/*
-list.txt
 low-PowerLibTestSAMD21/*
 networkSettings/*
-new_list.txt
 rf69_client_mytest/*
 rf69_server_mytest/*
 rtcLowPowerTest/*
 sensorTest/*
+
 
 
 
